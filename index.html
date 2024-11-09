@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>PERT/CPM Solver</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css">
+    <style>
+        #mynetwork {
+            width: 100%;
+            height: 600px;
+            border: 1px solid lightgray;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="fluid-container">
+        <nav class="navbar navbar-dark bg-dark">
+            <h1 class="navbar-brand mx-4">PERT/CPM Solver</h1>
+        </nav>
+        <div class="card mx-4 mt-3">
+            <h5 class="ml-3 mt-3">Input Values</h5>
+            <div class="row">
+                <div class="col-12">
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label for="bulkInput">Bulk Input</label>
+                            <textarea id="bulkInput" class="form-control" rows="5"
+                                placeholder="Example: A,,4.B,A,3.C,A,6"></textarea>
+                            <small class="form-text text-muted">Format: Activity,Predecessors,Duration separated by
+                                dots. Example: A,,4.B,A,3.C,A,6</small>
+                        </div>
+                        <button type="button" class="btn btn-primary" onclick="processBulkInput()">Process Bulk
+                            Input</button>
+                        <button type="button" class="btn btn-danger ml-2" onclick="clearTable()">Clear All</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card-body">
+                <h5>Activities Table</h5>
+                <table class="table table-sm table-hover">
+                    <thead>
+                        <tr>
+                            <th>Activity</th>
+                            <th>Predecessors</th>
+                            <th>Duration</th>
+                        </tr>
+                    </thead>
+                    <tbody id="iniTable">
+                    </tbody>
+                </table>
+                <button type="button" class="btn btn-success" onclick="processIniTable()">Calculate Network</button>
+            </div>
+        </div>
+
+        <div class="card mx-4 mt-3">
+            <h5 class="m-3">Results</h5>
+            <div class="card-body">
+                <table class="table table-sm table-hover">
+                    <thead>
+                        <tr>
+                            <th>Actividad</th>
+                            <th>Predecesores</th>
+                            <th>Sucesores</th>
+                            <th>Duración</th>
+                            <th>Holgura</th>
+                            <th>Nodo Anterior Arriba</th>
+                            <th>Nodo Anterior Abajo</th>
+                            <th>Nodo Siguiente Arriba</th>
+                            <th>Nodo Siguiente Abajo</th>
+                        </tr>
+                    </thead>
+                    <tbody id="finalTable">
+                    </tbody>
+                </table>
+            </div>
+            <div class="mx-4 mb-4">
+                <h5>Critical Path</h5>
+                <p id="criticRoute"></p>
+            </div>
+            <div id="mynetwork" class="mx-4 mb-4"></div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js"></script>
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script>
+    class Node {
+        constructor(name, predecessorChars, time) {
+            this.name = name;
+            this.predecessorChars = predecessorChars ?
+                (typeof predecessorChars === 'string' ?
+                    predecessorChars.split(',').filter(p => p.trim()) :
+                    predecessorChars) :
+                [];
+            this.time = parseInt(time) || 0;
+            this.startEarly = 0;
+            this.startLate = 0;
+            this.endEarly = 0;
+            this.endLate = 0;
+            this.slack = 0;
+            this.predecessors = [];
+            this.successors = [];
+        }
+    }
+
+
+
+    class Graph {
+        constructor() {
+            this.start = new Node("Initial", [], 0);
+            this.end = new Node("Finish", [], 0);
+            this.nodesList = [];
+        }
+
+        reset() {
+            this.start = new Node("Initial", [], 0);
+            this.end = new Node("Finish", [], 0);
+            this.nodesList = [];
+        }
+
+        addNodes(data) {
+            this.nodesList = data.map(node =>
+                new Node(node.name, node.precesors, node.time)
+            );
+        }
+
+        setEdges() {
+            // Conectar nodos iniciales al nodo start
+            this.nodesList.forEach(node => {
+                if (!node.predecessorChars || node.predecessorChars.length === 0) {
+                    node.predecessors.push(this.start);
+                    this.start.successors.push(node);
+                } else {
+                    // Conectar con predecesores
+                    node.predecessorChars.forEach(predChar => {
+                        const predNode = this.nodesList.find(n => n.name === predChar.trim());
+                        if (predNode) {
+                            node.predecessors.push(predNode);
+                            predNode.successors.push(node);
+                        }
+                    });
+                }
+            });
+
+            // Conectar nodos finales al nodo end
+            this.nodesList.forEach(node => {
+                if (node.successors.length === 0) {
+                    node.successors.push(this.end);
+                    this.end.predecessors.push(node);
+                }
+            });
+        }
+
+        calculateEarly() {
+            const calculated = new Set();
+            let remaining = [...this.nodesList];
+
+            while (remaining.length > 0) {
+                for (let i = remaining.length - 1; i >= 0; i--) {
+                    const node = remaining[i];
+                    const allPredecessorsCalculated = node.predecessors.every(p =>
+                        p === this.start || calculated.has(p.name)
+                    );
+
+                    if (allPredecessorsCalculated) {
+                        node.startEarly = Math.max(
+                            0,
+                            ...node.predecessors.map(p => p.endEarly)
+                        );
+                        node.endEarly = node.startEarly + node.time;
+                        calculated.add(node.name);
+                        remaining.splice(i, 1);
+                    }
+                }
+            }
+
+            // Calcular early times para el nodo final
+            this.end.startEarly = Math.max(...this.end.predecessors.map(p => p.endEarly));
+            this.end.endEarly = this.end.startEarly;
+        }
+
+        calculateLate() {
+            this.end.startLate = this.end.startEarly;
+            this.end.endLate = this.end.endEarly;
+
+            // Calcular late times en orden inverso
+            for (let i = this.nodesList.length - 1; i >= 0; i--) {
+                const node = this.nodesList[i];
+                node.endLate = Math.min(...node.successors.map(s => s.startLate));
+                node.startLate = node.endLate - node.time;
+                node.slack = node.startLate - node.startEarly;
+            }
+        }
+
+        getDataMatrix() {
+            return this.nodesList.map(node => ({
+                name: node.name,
+                precesors: node.predecessors
+                    .map(p => p.name)
+                    .filter(n => n !== "Initial")
+                    .join(","),
+                sucesors: node.successors
+                    .map(s => s.name)
+                    .filter(n => n !== "Finish")
+                    .join(","),
+                time: node.time,
+                slack: node.slack,
+                startEarly: node.startEarly,
+                startLate: node.startLate,
+                endEarly: node.endEarly,
+                endLate: node.endLate
+            }));
+        }
+
+        getCriticalRoute(node = this.start, route = "") {
+            if (node === this.end) {
+                return route;
+            }
+
+            for (let successor of node.successors) {
+                if (successor.slack === 0) {
+                    return this.getCriticalRoute(
+                        successor,
+                        route + (route ? "-" : "") + successor.name
+                    );
+                }
+            }
+            return route;
+        }
+    }
+
+
+        let graph = new Graph();
+        let dataTable = [];
+
+    function processBulkInput() {
+        const input = document.getElementById('bulkInput').value.trim();
+        if (!input) {
+            alert('Please enter data in the bulk input field');
+            return;
+        }
+
+        clearTable();
+
+        const activities = input.split('.');
+        let hasError = false;
+
+        activities.forEach(activity => {
+            if (!activity.trim()) return;
+
+            const parts = activity.split(',').map(s => s.trim());
+
+            if (parts.length < 2) {
+                alert(`Invalid format in: ${activity}`);
+                hasError = true;
+                return;
+            }
+
+            const name = parts[0];
+            const duration = parts[parts.length - 1];
+            const predecessors = parts.slice(1, -1).join(',');
+
+            if (!name || !duration) {
+                alert(`Invalid format in: ${activity}`);
+                hasError = true;
+                return;
+            }
+
+            const time = parseInt(duration);
+            if (isNaN(time) || time < 0) {
+                alert(`Invalid duration for activity ${name}`);
+                hasError = true;
+                return;
+            }
+
+            if (dataTable.some(row => row.name === name)) {
+                alert(`Duplicate activity: ${name}`);
+                hasError = true;
+                return;
+            }
+
+            dataTable.push({
+                name: name,
+                precesors: predecessors,
+                time: time
+            });
+        });
+
+        if (hasError) {
+            clearTable();
+            return;
+        }
+
+        printIniTable();
+        document.getElementById('bulkInput').value = '';
+    }
+
+
+        function clearTable() {
+            dataTable = [];
+            document.getElementById('iniTable').innerHTML = '';
+            document.getElementById('finalTable').innerHTML = '';
+            document.getElementById('criticRoute').innerHTML = '';
+            document.getElementById('mynetwork').innerHTML = '';
+            graph = new Graph();
+        }
+
+        function printIniTable() {
+            const tbody = document.getElementById('iniTable');
+            tbody.innerHTML = dataTable.map(row =>
+                `<tr>
+                    <td>${row.name}</td>
+                    <td>${row.precesors}</td>
+                    <td>${row.time}</td>
+                </tr>`
+            ).join('');
+        }
+
+        function processIniTable() {
+            if (dataTable.length === 0) {
+                alert('Please add some activities first');
+                return;
+            }
+
+            graph.reset();
+            graph.addNodes(dataTable);
+            graph.setEdges();
+            graph.calculateEarly();
+            graph.calculateLate();
+
+            const route = graph.getCriticalRoute().split('-');
+            const routeString = route
+                .filter(a => a)
+                .map(activity => `<span class="badge badge-pill badge-success">Activity ${activity}</span>`)
+                .join(' → ');
+
+            document.getElementById('criticRoute').innerHTML = routeString;
+            printFinalTable();
+        }
+
+        function printFinalTable() {
+            const matrix = graph.getDataMatrix();
+            document.getElementById('finalTable').innerHTML = matrix.map(row =>
+                `<tr>
+                    <td>${row.name}</td>
+                    <td>${row.precesors}</td>
+                    <td>${row.sucesors}</td>
+                    <td>${row.time}</td>
+                    <td>${row.slack}</td>
+                    <td>${row.startEarly}</td>
+                    <td>${row.startLate}</td>
+                    <td>${row.endEarly}</td>
+                    <td>${row.endLate}</td>
+                </tr>`
+            ).join('');
+
+            printGraph();
+        }
+
+    function printGraph() {
+        const matrix = graph.getDataMatrix();
+
+        // Crear nodos con mejor formato
+        const nodes = new vis.DataSet([
+            {
+                id: graph.start.name,
+                label: graph.start.name,
+                color: { background: '#dc3545', border: '#dc3545' },
+                level: 0
+            },
+            ...matrix.map((row, index) => ({
+                id: row.name,
+                level: 1 + Math.floor(index / 2),
+                label: `Activity ${row.name}\n\nDuration: ${row.time}\nSlack: ${row.slack}\nES: ${row.startEarly}\nLS: ${row.startLate}\nEF: ${row.endEarly}\nLF: ${row.endLate}`,
+                color: {
+                    background: row.slack === 0 ? '#28a745' : '#007bff',
+                    border: '#000000'
+                }
+            })),
+            {
+                id: graph.end.name,
+                label: `${graph.end.name}\n\nES: ${graph.end.startEarly}\nLS: ${graph.end.startLate}\nEF: ${graph.end.endEarly}\nLF: ${graph.end.endLate}`,
+                color: { background: '#dc3545', border: '#dc3545' },
+                level: matrix.length + 1
+            }
+        ]);
+
+        // Crear edges con mejor formato
+        const edges = new vis.DataSet([
+            ...graph.start.successors.map(node => ({
+                from: graph.start.name,
+                to: node.name,
+                arrows: 'to',
+                color: { color: '#000000' }
+            })),
+            ...matrix.flatMap(row =>
+                row.sucesors.split(',')
+                    .filter(s => s)
+                    .map(successor => ({
+                        from: row.name,
+                        to: successor,
+                        arrows: 'to',
+                        color: { color: '#000000' }
+                    }))
+            )
+        ]);
+
+        const container = document.getElementById('mynetwork');
+        const data = { nodes, edges };
+        const options = {
+            edges: {
+                smooth: {
+                    type: 'cubicBezier',
+                    forceDirection: 'horizontal'
+                }
+            },
+            nodes: {
+                shape: 'box',
+                margin: 10,
+                widthConstraint: {
+                    minimum: 120
+                },
+                font: {
+                    size: 14,
+                    face: 'arial',
+                    multi: true,
+                    bold: {
+                        color: '#ffffff',
+                        size: 16,
+                        face: 'arial'
+                    }
+                }
+            },
+            layout: {
+                hierarchical: {
+                    direction: 'LR',
+                    sortMethod: 'directed',
+                    nodeSpacing: 150,
+                    levelSeparation: 200
+                }
+            },
+            physics: false
+        };
+
+        new vis.Network(container, data, options);
+    }
+    </script>
+</body>
+
+</html>
